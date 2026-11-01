@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{background:#111;color:#ddd;font:12px sans-serif}.g{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}.c svg{width:100%}</style></head><body><div class="g" id="g"></div>
+<script type="module">
+import { Trainer } from '../js/trainer.js';
+import { EXERCISES } from '../js/data/exercises.js';
+const g = document.getElementById('g');
+for (const ex of EXERCISES.filter(e => e.uni)) for (const side of ['near','far']) {
+  const c = document.createElement('div'); c.className='c'; c.innerHTML = `<div>${ex.id} ${side}</div><div class=s></div>`; g.appendChild(c);
+  const t = new Trainer(c.querySelector('.s')); t.setExercise(ex, { side }); t.still(ex.frames.length > 1 ? 0.5 : 0);
+}
+</script></body></html>

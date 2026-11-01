@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Pose gallery</title>
+<style>body{background:#111;color:#ddd;font:12px sans-serif;margin:8px}.g{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}.c{background:#222;padding:3px}.c svg{width:100%;display:block}.r{display:flex;gap:2px}</style>
+</head><body><div class="g" id="g"></div>
+<script type="module">
+import { Trainer } from '../js/trainer.js';
+import { EXERCISES } from '../js/data/exercises.js';
+const params = new URLSearchParams(location.search);
+const only = params.get('cat');
+const g = document.getElementById('g');
+for (const ex of EXERCISES.filter(e => !only || only.split(',').some(x => x === e.cat || x === e.id))) {
+  const n = Math.max(2, ex.frames.length);
+  for (let i = 0; i < Math.min(n, 4); i++) {
+    const c = document.createElement('div'); c.className = 'c';
+    c.innerHTML = `<div>${ex.id} f${i}</div><div class=s></div>`;
+    g.appendChild(c);
+    const t = new Trainer(c.querySelector('.s'), { size: 'sm' });
+    t.setExercise(ex);
+    t.still(ex.frames.length === 1 ? 0 : i / ex.frames.length);
+  }
+}
+window.done = true;
+</script></body></html>

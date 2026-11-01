@@ -1,0 +1,14 @@
+{
+  "name": "Iron Form Fitness",
+  "short_name": "Iron Form",
+  "description": "At-home military-style workouts with safe, goal-based weight-loss plans.",
+  "start_url": "./#/home",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#12170d",
+  "theme_color": "#1b2213",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

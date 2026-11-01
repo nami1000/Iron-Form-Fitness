@@ -1,0 +1,12 @@
+{
+  "name": "iron-form-fitness",
+  "version": "1.0.0",
+  "description": "At-home military-style workout PWA with safe, goal-based weight-loss plans.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/serve.mjs 8080",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "license": "UNLICENSED"
+}
