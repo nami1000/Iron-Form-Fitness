@@ -212,3 +212,75 @@ test('default rest between sets is 30s; health flag keeps ≥45s', () => {
   const f = buildSession({ ...base, readinessFlag: true }, plan, parseKey('2026-11-01'));
   for (const it of f.items.filter((i) => i.phase === 'main' && i.sets > 1)) assert.ok(it.rest >= 45);
 });
+
+// ───── adaptive week ─────
+const plan6 = { startDate: '2026-11-01', targetDate: '2026-11-24', daysPerWeek: 6, version: 1 }; // Sun start
+const shape = (ws) => ws.days.map((d) => `${d.type}${d.status === 'done' ? '✓' : d.status === 'missed' ? '✗' : ''}`).join(' ');
+
+test('adaptive: on schedule → plan unchanged', async () => {
+  const { weekSchedule, WEEK_TEMPLATES: T } = await import('../js/engine/planner.js');
+  const ws = weekSchedule({ ...base, level: 1 }, plan6, [{ date: '2026-11-01', type: 'upper' }], parseKey('2026-11-02'));
+  assert.deepEqual(ws.days.map((d) => d.type), T[6]);
+  assert.equal(ws.missed, 0);
+  assert.ok(ws.days.every((d) => !d.catchUp));
+});
+
+test('adaptive: missed Mon+Tue → Wed Lower, rest day reused, yoga dropped, catch-up on', async () => {
+  const { weekSchedule } = await import('../js/engine/planner.js');
+  const ws = weekSchedule({ ...base, level: 1 }, plan6, [{ date: '2026-11-01', type: 'upper' }], parseKey('2026-11-04'));
+  assert.equal(shape(ws), 'upper✓ lower✗ cardio✗ lower cardio full dance');
+  assert.deepEqual(ws.dropped, ['yoga']);
+  assert.equal(ws.today.type, 'lower');
+  assert.ok(ws.today.catchUp);
+  assert.ok(ws.days[6].usedRest);
+});
+
+test('adaptive: never same muscles on back-to-back days', async () => {
+  const { weekSchedule } = await import('../js/engine/planner.js');
+  for (const dpw of [3, 4, 5, 6]) for (let skip = 1; skip < 6; skip += 1) {
+    const p = { ...plan6, daysPerWeek: dpw };
+    const ws = weekSchedule({ ...base, level: 2 }, p, [], addDays(parseKey('2026-11-01'), skip));
+    const types = ws.days.slice(skip).map((d) => d.type);
+    for (let i = 1; i < types.length; i += 1) {
+      const a = types[i - 1]; const b = types[i];
+      const reg = { upper: ['u'], lower: ['l'], full: ['u', 'l'] };
+      assert.ok(!(reg[a] || []).some((x) => (reg[b] || []).includes(x)), `${dpw}d skip ${skip}: ${types}`);
+    }
+  }
+});
+
+test('adaptive: keeps ≥1 day off per week and respects hard-day cap', async () => {
+  const { weekSchedule, MAX_HARD_STREAK } = await import('../js/engine/planner.js');
+  for (const level of [1, 2, 3]) for (const dpw of [3, 4, 5, 6]) for (let skip = 0; skip < 7; skip += 1) {
+    const ws = weekSchedule({ ...base, level }, { ...plan6, daysPerWeek: dpw }, [], addDays(parseKey('2026-11-01'), skip));
+    const off = ws.days.filter((d) => d.status === 'missed' || d.type === 'rest').length;
+    assert.ok(off >= 1, `L${level} ${dpw}d skip ${skip}: no day off`);
+    let run = 0;
+    for (const d of ws.days.slice(skip)) {
+      run = ['upper', 'lower', 'full', 'cardio'].includes(d.type) ? run + 1 : 0;
+      assert.ok(run <= MAX_HARD_STREAK[level - 1], `L${level}: ${d.key} hard run ${run}`);
+    }
+  }
+});
+
+test('adaptive: rest days are NOT reused when it is unsafe', async () => {
+  const { weekSchedule } = await import('../js/engine/planner.js');
+  const sun = [{ date: '2026-11-01', type: 'upper' }];
+  const pain = [{ date: '2026-11-03', type: 'upper', pain: [{ exId: 'pushup' }] }];
+  for (const [prof, logs, label] of [[{ ...base, level: 1, readinessFlag: true }, sun, 'health flag'], [{ ...base, level: 1 }, [...sun, ...pain], 'pain'],
+    [{ ...base, level: 1 }, [...sun, { date: '2026-11-03', type: 'cardio', rating: 'Too hard' }], 'too hard']]) {
+    const ws = weekSchedule(prof, plan6, logs, parseKey('2026-11-04'));
+    assert.equal(ws.days[6].type, 'rest', label);
+    assert.ok(ws.days.every((d) => !d.catchUp), label);
+  }
+});
+
+test('catch-up session: up to +10 min and +10% volume, still safe', () => {
+  const p = { ...base, level: 1, issues: ['knee'], minutes: 20 };
+  const normal = buildSession(p, plan6, parseKey('2026-11-04'), { typeOverride: 'lower' });
+  const extra = buildSession(p, plan6, parseKey('2026-11-04'), { typeOverride: 'lower', catchUp: true });
+  assert.ok(sessionSeconds(extra) > sessionSeconds(normal) + 240, 'longer');
+  assert.ok(sessionSeconds(extra) / 60 <= 20 + 10 + 3, `${sessionSeconds(extra) / 60} min`);
+  assert.ok(extra.kcal > normal.kcal);
+  for (const it of extra.items) assert.ok((BY_ID[it.exId].stress.knee || 0) < 2 && !BY_ID[it.exId].impact, it.exId);
+});

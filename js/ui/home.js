@@ -1,10 +1,10 @@
 import { h, mount, ring, fmtDate, modal, toast } from './dom.js';
 import { Trainer } from '../trainer.js';
 import { BY_ID, ISSUE_AREAS } from '../data/exercises.js';
-import { DAY_TYPES, dateKey, addDays, dayType, parseKey, LEVELS } from '../engine/planner.js';
+import { DAY_TYPES, dateKey, addDays, parseKey, LEVELS, CATCH_UP } from '../engine/planner.js';
 import { rankFor, needsWeighIn } from '../engine/progress.js';
 import { fromKg, toKg, weightUnit, round } from '../engine/units.js';
-import { S, fmtW, sessionFor, todayType, streak, refreshProjection } from '../service.js';
+import { S, fmtW, sessionFor, todayType, streak, refreshProjection, dayPlan, thisWeek } from '../service.js';
 import { update } from '../store.js';
 import { unlockAudio } from '../music.js';
 
@@ -94,6 +94,23 @@ export function renderHome(root) {
     notices.push(h('div', { class: 'card alert' }, h('div', { class: 'small' }, '⚕ Your health check flagged something. Workouts stay gentle until you get medical clearance (update it in Settings → Edit profile).')));
   }
 
+  // adaptive plan notice
+  const ws = thisWeek(today);
+  if (ws?.missed) {
+    const wd = (k) => parseKey(k).toLocaleDateString(undefined, { weekday: 'short' });
+    const missedDays = ws.days.filter((d) => d.status === 'missed');
+    const moved = ws.days.filter((d) => d.usedRest);
+    const lines = [
+      `Missed: ${missedDays.map((d) => `${wd(d.key)} (${DAY_TYPES[d.type].short})`).join(', ')}. Your week has been rearranged so the important workouts still happen.`,
+      ws.today.status !== 'done' ? `Today: ${DAY_TYPES[ws.today.type].label}.` : null,
+      moved.length ? `${moved.map((d) => wd(d.key)).join(', ')} rest day → ${moved.map((d) => DAY_TYPES[d.type].short).join(', ')} (safe to use: you still get ${7 - ws.days.filter((d) => d.type !== 'rest' && d.status !== 'missed').length} day(s) off this week).` : null,
+      ws.dropped.length ? `Dropped this week: ${ws.dropped.map((t) => DAY_TYPES[t].short).join(', ')}. Extra work in the remaining sessions makes up the calories.` : null,
+      ws.safe.ok ? `⚡ Catch-up sessions: +${CATCH_UP.minutes} min and up to +${Math.round((CATCH_UP.volume - 1) * 100)}% volume, within your safety limits.`
+        : `Not adding extra work or using rest days because ${ws.safe.why}. Safety first; your projection will update.`,
+    ].filter(Boolean);
+    notices.unshift(h('div', { class: 'card alert' }, h('h3', {}, '📋 Plan adjusted'), lines.map((l) => h('p', { class: 'small' }, l))));
+  }
+
   // today card
   const todayCard = h('div', { class: 'card' });
   const info = DAY_TYPES[type];
@@ -115,7 +132,8 @@ export function renderHome(root) {
     todayCard.append(h('div', { class: 'row between' }, h('div', { class: 'tiny muted' }, `TODAY · WEEK ${sess.prog.week}${sess.prog.deload ? ' · DELOAD (lighter)' : ''}`),
       h('button', { class: 'linkbtn small', onclick: () => pickType() }, 'Change')),
       h('h2', {}, `${info.icon} ${info.label}`),
-      h('div', { class: 'row' }, h('span', { class: 'badge' }, `⏱ ${Math.round(sess.seconds / 60)} min`), h('span', { class: 'badge' }, `🔥 ≈${sess.kcal} kcal`), h('span', { class: 'badge' }, `${main.length} drills`)),
+      h('div', { class: 'row' }, h('span', { class: 'badge' }, `⏱ ${Math.round(sess.seconds / 60)} min`), h('span', { class: 'badge' }, `🔥 ≈${sess.kcal} kcal`), h('span', { class: 'badge' }, `${main.length} drills`),
+        sess.catchUp ? h('span', { class: 'badge fire' }, `⚡ Catch-up +${CATCH_UP.minutes} min`) : null),
       h('p', { class: 'small muted', style: { marginTop: '8px' } }, [...new Set(main.map((i) => BY_ID[i.exId].name))].slice(0, 6).join(' · ')),
       h('a', { class: 'btn big block', href: '#/session' }, '▶ Start mission'));
   }
@@ -152,10 +170,14 @@ export function renderHome(root) {
   const week = h('div', { class: 'card flat' }, h('div', { class: 'row between' }, h('h3', {}, 'This week'), h('span', { class: 'tiny muted' }, `Best streak ${Math.max(st.bestStreak, s)} 🔥`)),
     h('div', { class: 'week' }, Array.from({ length: 7 }, (_, i) => {
       const d = addDays(startOfWeek, i); const k = dateKey(d);
-      const t = k < st.plan.startDate ? null : (k === tKey ? todayType(d) : dayType(st.plan, d));
+      const dp = k < st.plan.startDate ? null : dayPlan(d);
+      const t = !dp ? null : k === tKey ? todayType(d) : dp.type;
       const done = logged.has(k);
-      const cls = ['day', k === tKey ? 'today' : '', done ? 'done' : '', !done && t && t !== 'rest' && k < tKey ? 'missed' : ''].join(' ');
-      return h('div', { class: cls }, d.toLocaleDateString(undefined, { weekday: 'short' }), h('span', { class: 'ic' }, done ? '✅' : t ? DAY_TYPES[t].icon : '·'), t ? DAY_TYPES[t].short : '');
+      const missedDay = !done && dp && dp.status === 'missed';
+      const cls = ['day', k === tKey ? 'today' : '', done ? 'done' : '', missedDay ? 'missed' : '', dp?.usedRest ? 'moved' : ''].join(' ');
+      return h('div', { class: cls, title: dp?.usedRest ? 'Rest day used to catch up' : '' }, d.toLocaleDateString(undefined, { weekday: 'short' }),
+        h('span', { class: 'ic' }, done ? '✅' : missedDay ? '✖' : t ? DAY_TYPES[t].icon : '·'),
+        t ? (missedDay ? h('s', {}, DAY_TYPES[t].short) : DAY_TYPES[t].short) : '', dp?.catchUp && !done ? h('span', { class: 'cu' }, '⚡') : null);
     })));
 
   const rankCard = rank.next ? h('div', { class: 'card flat' }, h('div', { class: 'row between' }, h('div', {}, h('h3', {}, `Rank: ${rank.title}`), h('div', { class: 'small muted' }, `${rank.next.remaining} more sessions to ${rank.next.title}`)), h('span', { style: { fontSize: '2rem' } }, '🎖')),
@@ -192,7 +214,8 @@ export function renderSessionPreview(root, query) {
   mount(root,
     h('div', { class: 'header' }, h('a', { href: '#/home', class: 'btn ghost small' }, '← Base'), h('span', { class: 'tiny muted' }, recovery ? 'OPTIONAL' : `WEEK ${sess.prog.week}`)),
     h('h1', {}, `${info.icon} ${info.label}`),
-    h('div', { class: 'row' }, h('span', { class: 'badge' }, `⏱ ${Math.round(sess.seconds / 60)} min + 1 min pep talks`), h('span', { class: 'badge' }, `🔥 ≈${sess.kcal} kcal`)),
+    h('div', { class: 'row' }, h('span', { class: 'badge' }, `⏱ ${Math.round(sess.seconds / 60)} min + 1 min pep talks`), h('span', { class: 'badge' }, `🔥 ≈${sess.kcal} kcal`),
+      sess.catchUp ? h('span', { class: 'badge fire' }, `⚡ Catch-up: +${CATCH_UP.minutes} min, +${Math.round((CATCH_UP.volume - 1) * 100)}% volume`) : null),
     h('div', { class: 'card flat', style: { marginTop: '12px' } }, h('div', { class: 'small' }, h('b', {}, 'Gear: '), equip.size ? [...equip].join(', ') : 'none, bodyweight only',
       weights.length ? ` · Dumbbells: ${[...new Set(weights)].sort((a, b) => a - b).map((w) => `${round(fromKg(w, u), 1)}`).join(', ')} ${weightUnit(u)}` : ''),
     h('div', { class: 'tiny muted' }, 'Tap any drill to see the demo and how to do it.')),

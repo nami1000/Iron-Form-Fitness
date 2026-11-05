@@ -35,6 +35,7 @@ Iron Form is an installable web app (PWA) with no build step and no backend. Pla
 - **Honest goal assessment.** If the goal isn't safely achievable by your date, the app says so and offers two fixes: the realistic amount by that date, or the date by which the full goal is achievable.
 - A weekly rotation of upper, lower and full-body strength, cardio intervals, **dance cardio**, **yoga & mobility** and **rest days**.
 - Progressive overload: volume rises for 3 weeks, then every 4th week is a lighter "deload" week.
+- **An adaptive week.** Missed workouts aren't lost: the week is rearranged so the most important ones still happen (strength → cardio → dance → yoga). A rest day is used for training only when it's safe. Catch-up sessions add up to 10 minutes and 10% volume so the goal date doesn't move.
 
 **Training with Sgt. Iron**
 - One consistent animated trainer demonstrates **94 exercises** and does each rep *with you*, in time with the rep counter.
@@ -81,6 +82,7 @@ Injury prevention is the top design priority. Every rule below is enforced in [`
 | Health readiness | A PAR-Q+-style questionnaire. Any "yes" caps training at beginner level with no jumping and at least 45 s rest, and recommends medical clearance. |
 | Safe dumbbell loads | Weights are chosen from the ones you own, with a per-level cap per exercise type. If every weight you own is too heavy, the exercise is skipped rather than overloaded. |
 | Pain reporting | **Something hurts** stops the move and lets you skip it for today or remove it from your plan for good. It shows when to stop and seek help. |
+| Catching up after missed days | Missed workouts roll forward by priority, but rest days are used **only** if there's no health-check flag, no pain report in the last 3 days and the last workout wasn't rated "Too hard". At least one day off per week is kept, hard days in a row are capped (4 / 5 / 6 by level), and the same muscles are never trained two days running. Catch-up adds at most +10 min / +10% volume. |
 | Recovery | Every session has a warm-up and a cool-down. The cool-down stretches the muscles you actually trained. Every template includes a rest day, and every 4th week is a deload week. |
 | Safe weight loss | At most ~1% of body weight (≤ 1 kg) per week, intake never planned below 1,200 kcal (women) / 1,500 kcal (men), and never a goal below a healthy BMI. It warns if you're losing too fast. |
 
@@ -116,7 +118,7 @@ sw.js, manifest.webmanifest   Offline support & installability
 npm test
 ```
 
-The 29 tests cover: unit conversions, the BMR formula, goal assessment (comfortable / ambitious / unrealistic, minimum calories, healthy-BMI floor), dumbbell safety caps, **one test per problem area** confirming no loading exercise is ever scheduled across 4 weeks, no jumping for knee issues or beginners, the health-readiness cap, the equipment filter, the pain-report filter, session length for every level and duration, rest days, streak rules, weight-trend projection, projection-change notices, cool-down muscle coverage (92% of trained volume across 120 generated sessions), 30-second rest, and that 300 consecutive pep talks are all unique.
+The 35 tests cover: unit conversions, the BMR formula, goal assessment (comfortable / ambitious / unrealistic, minimum calories, healthy-BMI floor), dumbbell safety caps, **one test per problem area** confirming no loading exercise is ever scheduled across 4 weeks, no jumping for knee issues or beginners, the health-readiness cap, the equipment filter, the pain-report filter, session length for every level and duration, rest days, streak rules, weight-trend projection, projection-change notices, cool-down muscle coverage (92% of trained volume across 120 generated sessions), 30-second rest, the adaptive week (missed days rescheduled, rest days reused only when safe, no back-to-back same-muscle days, hard-day caps), catch-up session limits, and that 300 consecutive pep talks are all unique.
 
 For visual checks, run `npm start` and open `/dev/gallery.html` (every pose) or `/dev/sides.html` (one-sided moves, both sides).
 
@@ -185,6 +187,7 @@ All values are stored internally in **metric units**: kilograms, centimetres, ki
 | Joint stress scale | 0 none · 1 minimal (allowed, with caution) · 2 moderate (excluded for that area) · 3 high |
 | Levels | 1 Beginner · 2 Intermediate · 3 Advanced |
 | Projection | Energy model (plan deficit + actual workout burn) until ≥ 3 weigh-ins over ≥ 10 days, then 60% measured trend + 40% model, capped at the safe ceiling |
+| Adaptive week | Priority: strength 1 · cardio 2 · dance 3 · yoga 4. ≥ 1 non-training day per plan week; max hard days in a row 4 / 5 / 6 (yoga & dance are light days); catch-up = +10 min and ×1.1 volume (capped at 1.5× base) |
 | Dates | Local calendar days (`YYYY-MM-DD`); weeks start on the plan's start day |
 
 ## Accomplishments that we're proud of
@@ -208,7 +211,7 @@ All values are stored internally in **metric units**: kilograms, centimetres, ki
 - **Multi-user version** (after 3–6 months of personal testing): accounts, onboarding for others, and sharing.
 - More exercises and variations, with an "easier / harder" swap button on each move.
 - Optional real-video demos alongside the animated trainer.
-- Smarter adaptation: adjust volume from rep completion and ratings over time.
+- Smarter adaptation: adjust volume from rep completion and ratings over time, and carry calorie catch-up across weeks.
 - Nutrition helpers: simple calorie and protein tracking against the daily target.
 - Smart-scale and health-app integration (Apple Health / Google Fit) for automatic weigh-ins.
 - Reminders and notifications for workouts and weekly weigh-ins.

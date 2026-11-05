@@ -265,7 +265,12 @@ const PATTERNS = {
   full: ['lower', 'upper', 'core', 'lower', 'upper', 'core', 'full', 'upper', 'lower'],
 };
 
-function strengthMain(profile, pool, r, prog, seconds, type) {
+function strengthMain(profile, pool, r, prog, seconds, type, finisher = false) {
+  const wantFinisher = finisher || ((profile.focus || []).includes('cardio') && seconds >= 12 * 60);
+  if (wantFinisher) {
+    const [fw, fr] = INTERVALS[effectiveLevel(profile) - 1];
+    seconds -= 4 * (fw + fr + 3); // reserve time for the 2×2 finisher so the session stays on length
+  }
   const items = [];
   const used = new Set();
   const fs = focusScore(profile);
@@ -297,7 +302,7 @@ function strengthMain(profile, pool, r, prog, seconds, type) {
     guard += 1;
   }
   // cardio finisher when cardio is a focus
-  if ((profile.focus || []).includes('cardio') && seconds >= 12 * 60) {
+  if (wantFinisher) {
     const cardio = pool.filter((e) => e.cat === 'cardio' && e.mode === 'time');
     const [w, rest] = INTERVALS[effectiveLevel(profile) - 1];
     const fin = [];
@@ -376,14 +381,121 @@ export function dayType(plan, date) {
   return tpl[idx % 7];
 }
 
+// ───────── adaptive week (missed workouts roll forward) ─────────
+export const CATCH_UP = { minutes: 10, volume: 1.1 };
+// Lower number = more important to keep when the week runs out of days.
+export const PRIORITY = { lower: 1, upper: 1, full: 1, cardio: 2, dance: 3, yoga: 4 };
+// Hard days in a row allowed before a rest is forced (yoga & dance are light days).
+export const MAX_HARD_STREAK = [4, 5, 6];
+const HARD = new Set(['upper', 'lower', 'full', 'cardio']);
+const REGIONS = { upper: ['upper'], lower: ['lower'], full: ['upper', 'lower'] };
+const sameMuscles = (a, b) => (REGIONS[a] || []).some((x) => (REGIONS[b] || []).includes(x));
+
+/** True when it's safe to push harder (use a rest day, add catch-up volume). */
+export function catchUpAllowed(profile, logs, date) {
+  if (profile.readinessFlag) return { ok: false, why: 'your health check is flagged' };
+  const today = dateKey(date);
+  const recent = logs.filter((l) => l.date <= today && l.date >= dateKey(addDays(date, -3)));
+  if (recent.some((l) => (l.pain || []).length)) return { ok: false, why: 'you reported discomfort in the last 3 days' };
+  const last = [...logs].filter((l) => l.date < today || l.date === today).sort((a, b) => (a.startedAt || a.date).localeCompare(b.startedAt || b.date)).pop();
+  if (last?.rating === 'Too hard') return { ok: false, why: 'your last workout felt too hard' };
+  return { ok: true };
+}
+
+/**
+ * The current plan-week as it should now run, given what was actually done.
+ * Returns one entry per day of the week: {key, type, status, catchUp, usedRest}
+ * where status is done | missed | rest | today | planned, plus the workouts
+ * that no longer fit (`dropped`).
+ */
+export function weekSchedule(profile, plan, logs, date) {
+  const idx = dayIndex(plan, date);
+  const tpl = WEEK_TEMPLATES[plan.daysPerWeek] || WEEK_TEMPLATES[4];
+  if (idx < 0) return null;
+  const week = Math.floor(idx / 7);
+  const off = idx % 7;
+  const start = addDays(parseKey(plan.startDate), week * 7);
+  const keys = Array.from({ length: 7 }, (_, i) => dateKey(addDays(start, i)));
+  const real = logs.filter((l) => !l.recovery);
+  const byDay = {};
+  for (const l of real) (byDay[l.date] ||= []).push(l);
+  const owed = tpl.filter((t) => t !== 'rest');
+  const consume = (type) => {
+    let i = owed.indexOf(type);
+    if (i < 0) i = owed.reduce((b, t, j) => (b < 0 || PRIORITY[t] > PRIORITY[owed[b]] ? j : b), -1); // counts for the least important
+    if (i >= 0) owed.splice(i, 1);
+  };
+  const days = [];
+  let offDays = 0; // non-training days so far this week (rest or missed)
+  let missed = 0;
+  for (let i = 0; i < off; i += 1) {
+    const done = byDay[keys[i]];
+    if (done) { done.forEach((l) => consume(l.type)); days.push({ key: keys[i], type: done[done.length - 1].type, status: 'done' }); }
+    else {
+      offDays += 1;
+      if (tpl[i] !== 'rest') missed += 1;
+      days.push({ key: keys[i], type: tpl[i], status: tpl[i] === 'rest' ? 'rest' : 'missed' });
+    }
+  }
+  const safe = catchUpAllowed(profile, logs, date);
+  // consecutive hard days ending yesterday (looks back across weeks)
+  let hardRun = 0;
+  for (let d = addDays(parseKey(keys[off]), -1); ; d = addDays(d, -1)) {
+    const l = byDay[dateKey(d)];
+    if (l && l.some((x) => HARD.has(x.type))) hardRun += 1; else break;
+  }
+  let prev = days.length ? days[days.length - 1] : null;
+  let prevType = prev && prev.status === 'done' ? prev.type : null;
+  if (off === 0) { const y = byDay[dateKey(addDays(parseKey(keys[0]), -1))]; prevType = y ? y[y.length - 1].type : null; }
+  const maxHard = MAX_HARD_STREAK[effectiveLevel(profile) - 1];
+
+  for (let i = off; i < 7; i += 1) {
+    const status = i === off ? 'today' : 'planned';
+    const done = i === off ? byDay[keys[i]] : null;
+    if (done) {
+      done.forEach((l) => consume(l.type));
+      const t = done[done.length - 1].type;
+      days.push({ key: keys[i], type: t, status: 'done' });
+      hardRun = HARD.has(t) ? hardRun + 1 : 0; prevType = t;
+      continue;
+    }
+    let type;
+    if (!missed) {
+      type = tpl[i]; // on schedule: keep the normal plan
+    } else {
+      const remaining = 7 - i;
+      const restsLeft = tpl.slice(i).filter((t) => t === 'rest').length;
+      // keep the template's rest days unless it's safe to use them; always ≥1 day off per week
+      const restNeeded = safe.ok ? Math.max(0, 1 - offDays) : restsLeft;
+      const slots = remaining - restNeeded;
+      const ranked = owed.map((t, j) => ({ t, j })).sort((a, b) => PRIORITY[a.t] - PRIORITY[b.t] || a.j - b.j).map((x) => x.t);
+      const fits = ranked.slice(0, Math.max(0, slots));
+      const ok = (t) => !(HARD.has(t) && hardRun >= maxHard) && !sameMuscles(t, prevType);
+      if (!safe.ok && tpl[i] === 'rest') type = 'rest';
+      // never the same muscles two days running: fall back to a light day, else rest
+      else type = fits.find(ok) || ranked.find((t) => !HARD.has(t)) || 'rest';
+    }
+    const usedRest = tpl[i] === 'rest' && type !== 'rest';
+    days.push({ key: keys[i], type, status, catchUp: !!missed && safe.ok && type !== 'rest', usedRest });
+    if (type === 'rest') { offDays += 1; hardRun = 0; prevType = null; } else {
+      const k = owed.indexOf(type); if (k >= 0) owed.splice(k, 1);
+      hardRun = HARD.has(type) ? hardRun + 1 : 0; prevType = type;
+    }
+  }
+  return { days, today: days[off], dropped: missed ? owed : [], missed, safe, weekStart: keys[0] };
+}
+
 /**
  * Build the session for a date. Deterministic for (plan, date, seedSalt) so the
  * same day always shows the same workout; `salt` lets the user reshuffle.
  */
-export function buildSession(profile, plan, date, { avoid = [], intensity = 1, salt = '', typeOverride } = {}) {
+export function buildSession(profile, plan, date, { avoid = [], intensity = 1, salt = '', typeOverride, catchUp = false } = {}) {
   const type = typeOverride || dayType(plan, date);
   const prog = progression(plan, date, intensity);
-  const minutes = profile.minutes;
+  // Catch-up sessions (after missed workouts): up to +10 min and +10% volume,
+  // never above the 1.5× progression ceiling, and still inside every safety filter.
+  if (catchUp) prog.factor = Math.min(1.5, prog.factor * CATCH_UP.volume);
+  const minutes = profile.minutes + (catchUp ? CATCH_UP.minutes : 0);
   const r = rng(`${dateKey(date)}|${type}|${plan.version}|${salt}`);
   const pool = eligiblePool(profile, avoid);
   if (type === 'rest') {
@@ -396,7 +508,7 @@ export function buildSession(profile, plan, date, { avoid = [], intensity = 1, s
   const kind = DAY_TYPES[type].kind;
   const warm = warmup(profile, pool, r, prog, warmSec, type);
   let main;
-  if (kind === 'strength') main = strengthMain(profile, pool, r, prog, mainSec, type);
+  if (kind === 'strength') main = strengthMain(profile, pool, r, prog, mainSec, type, catchUp);
   else if (kind === 'yoga') main = yogaMain(profile, pool, r, prog, mainSec);
   else main = intervalMain(profile, pool, r, prog, mainSec, kind);
   const cool = type === 'yoga' ? [] : cooldown(profile, pool, r, prog, coolSec, main);
@@ -404,7 +516,7 @@ export function buildSession(profile, plan, date, { avoid = [], intensity = 1, s
     const sav = pool.find((e) => e.id === 'savasana');
     if (sav) cool.push(makeItem(sav, profile, prog, 'cooldown', { restAfter: 0 }));
   }
-  const session = { type, date: dateKey(date), items: [...warm, ...main, ...cool], prog };
+  const session = { type, date: dateKey(date), items: [...warm, ...main, ...cool], prog, catchUp };
   session.seconds = sessionSeconds(session);
   session.kcal = estimateKcal(session, profile.kg);
   return session;

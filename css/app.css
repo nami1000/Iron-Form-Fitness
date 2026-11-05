@@ -180,3 +180,8 @@ hr { border: 0; border-top: 1px dashed var(--line); margin: 14px 0; }
 .streak-banner { display: flex; align-items: center; gap: 14px; background: linear-gradient(90deg, #3a2a12, #2a2414); border: 1px solid var(--orange); border-radius: 14px; padding: 12px 16px; }
 .streak-banner .flame { font-size: 2.4rem; line-height: 1; }
 .streak-banner b { font-family: var(--stencil); font-weight: 400; letter-spacing: 0.05em; font-size: 1.5rem; color: #ffd39a; text-transform: uppercase; }
+
+.day { position: relative; }
+.day.moved { border-color: var(--orange); }
+.day .cu { position: absolute; top: 2px; right: 4px; font-size: 0.7rem; }
+.day s { opacity: 0.8; }
