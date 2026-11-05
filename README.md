@@ -81,7 +81,8 @@ Injury prevention is the top design priority. Every rule below is enforced in [`
 | No jumping when it's risky | Impact moves are removed for beginners and for knee, ankle, hip or lower-back issues. |
 | Health readiness | A PAR-Q+-style questionnaire. Any "yes" caps training at beginner level with no jumping and at least 45 s rest, and recommends medical clearance. |
 | Safe dumbbell loads | Weights are chosen from the ones you own, with a per-level cap per exercise type. If every weight you own is too heavy, the exercise is skipped rather than overloaded. |
-| Pain reporting | **Something hurts** stops the move and lets you skip it for today or remove it from your plan for good. It shows when to stop and seek help. |
+| Pain reporting | **Something hurts** asks *where* (body-area chips), *how bad* (mild / moderate / sharp) and *what it feels like* (free text, scanned for body parts and warning signs such as chest pain, dizziness, numbness, a pop or swelling). The area is then protected like a sign-up problem area: removed from the rest of today, this week and future weeks, and the exercise is paused. Sharp pain or warning words show a clear "stop and get checked" message. |
+| Recovery check-ins | 14 days after a report, the home screen asks how it is. *Feeling good* brings the paused exercises back; *Not ready yet* or *Worse* keeps them paused and asks again in another 14 days, for as long as needed. Settings → Pain & recovery shows every report, what's paused and the next check-in. |
 | Catching up after missed days | Missed workouts roll forward by priority, but rest days are used **only** if there's no health-check flag, no pain report in the last 3 days and the last workout wasn't rated "Too hard". At least one day off per week is kept, hard days in a row are capped (4 / 5 / 6 by level), and the same muscles are never trained two days running. Catch-up adds at most +10 min / +10% volume. |
 | Recovery | Every session has a warm-up and a cool-down. The cool-down stretches the muscles you actually trained. Every template includes a rest day, and every 4th week is a deload week. |
 | Safe weight loss | At most ~1% of body weight (≤ 1 kg) per week, intake never planned below 1,200 kcal (women) / 1,500 kcal (men), and never a goal below a healthy BMI. It warns if you're losing too fast. |
@@ -103,6 +104,7 @@ js/engine/calc.js       BMR/TDEE, goal feasibility, dumbbell safety caps
 js/engine/planner.js    Safety filter, weekly schedule, session builder, progression
 js/engine/progress.js   Streaks, ranks, weight trend, projection
 js/engine/pep.js        Unique 30-second pep-talk generator
+js/engine/injury.js     Pain reports, area protection and 2-weekly check-ins
 js/engine/units.js      Unit conversion (metric internally)
 js/ui/*.js              Screens: onboarding, home, player, summary, progress, library, settings
 tests/engine.test.mjs   Engine test suite (node:test)
@@ -118,7 +120,7 @@ sw.js, manifest.webmanifest   Offline support & installability
 npm test
 ```
 
-The 35 tests cover: unit conversions, the BMR formula, goal assessment (comfortable / ambitious / unrealistic, minimum calories, healthy-BMI floor), dumbbell safety caps, **one test per problem area** confirming no loading exercise is ever scheduled across 4 weeks, no jumping for knee issues or beginners, the health-readiness cap, the equipment filter, the pain-report filter, session length for every level and duration, rest days, streak rules, weight-trend projection, projection-change notices, cool-down muscle coverage (92% of trained volume across 120 generated sessions), 30-second rest, the adaptive week (missed days rescheduled, rest days reused only when safe, no back-to-back same-muscle days, hard-day caps), catch-up session limits, and that 300 consecutive pep talks are all unique.
+The 39 tests cover: unit conversions, the BMR formula, goal assessment (comfortable / ambitious / unrealistic, minimum calories, healthy-BMI floor), dumbbell safety caps, **one test per problem area** confirming no loading exercise is ever scheduled across 4 weeks, no jumping for knee issues or beginners, the health-readiness cap, the equipment filter, the pain-report filter, session length for every level and duration, rest days, streak rules, weight-trend projection, projection-change notices, cool-down muscle coverage (92% of trained volume across 120 generated sessions), 30-second rest, the adaptive week (missed days rescheduled, rest days reused only when safe, no back-to-back same-muscle days, hard-day caps), catch-up session limits, pain-report text analysis, the reported area being protected across future weeks, the 14-day check-in cycle, and that 300 consecutive pep talks are all unique.
 
 For visual checks, run `npm start` and open `/dev/gallery.html` (every pose) or `/dev/sides.html` (one-sided moves, both sides).
 
@@ -187,6 +189,7 @@ All values are stored internally in **metric units**: kilograms, centimetres, ki
 | Joint stress scale | 0 none · 1 minimal (allowed, with caution) · 2 moderate (excluded for that area) · 3 high |
 | Levels | 1 Beginner · 2 Intermediate · 3 Advanced |
 | Projection | Energy model (plan deficit + actual workout burn) until ≥ 3 weigh-ins over ≥ 10 days, then 60% measured trend + 40% model, capped at the safe ceiling |
+| Pain check-ins | Every 14 days from the report (or the last check-in) until the user answers "ready"; re-reporting the same area restarts the clock |
 | Adaptive week | Priority: strength 1 · cardio 2 · dance 3 · yoga 4. ≥ 1 non-training day per plan week; max hard days in a row 4 / 5 / 6 (yoga & dance are light days); catch-up = +10 min and ×1.1 volume (capped at 1.5× base) |
 | Dates | Local calendar days (`YYYY-MM-DD`); weeks start on the plan's start day |
 

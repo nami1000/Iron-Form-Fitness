@@ -10,6 +10,7 @@ const DEFAULTS = () => ({
   weighIns: [],
   usedPep: [],
   avoid: [],
+  injuries: [],
   intensity: 1,
   lastProjectedLoss: null,
   notices: [],

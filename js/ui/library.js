@@ -1,17 +1,19 @@
 import { h, mount } from './dom.js';
 import { EXERCISES } from '../data/exercises.js';
 import { exclusionReason } from '../engine/planner.js';
-import { S } from '../service.js';
+import { S, planInputs } from '../service.js';
+import { injuryFor } from '../engine/injury.js';
 import { thumb, exerciseModal } from './home.js';
 
 const CATS = [['warmup', 'Warm-up'], ['strength', 'Strength'], ['core', 'Core'], ['cardio', 'Cardio'], ['dance', 'Dance'], ['yoga', 'Yoga'], ['stretch', 'Stretch & cool-down']];
 
 export function renderLibrary(root) {
   const st = S();
+  const { profile, avoid } = planInputs();
   let filter = 'all';
   const draw = () => {
     const sections = CATS.map(([cat, label]) => {
-      const list = EXERCISES.filter((e) => e.cat === cat).map((e) => ({ e, why: exclusionReason(e, st.profile, st.avoid) }))
+      const list = EXERCISES.filter((e) => e.cat === cat).map((e) => ({ e, why: (injuryFor(e, st.injuries) ? `Paused while your ${injuryFor(e, st.injuries).areas.join(' / ') || 'injury'} recovers (check-in ${injuryFor(e, st.injuries).nextCheck})` : null) || exclusionReason(e, profile, avoid) }))
         .filter(({ why }) => filter === 'all' || (filter === 'mine' ? !why : !!why));
       if (!list.length) return null;
       return h('div', {}, h('div', { class: 'phase-title' }, label.toUpperCase()),

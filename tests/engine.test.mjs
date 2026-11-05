@@ -284,3 +284,58 @@ test('catch-up session: up to +10 min and +10% volume, still safe', () => {
   assert.ok(extra.kcal > normal.kcal);
   for (const it of extra.items) assert.ok((BY_ID[it.exId].stress.knee || 0) < 2 && !BY_ID[it.exId].impact, it.exId);
 });
+
+// ───── pain reports & check-ins ─────
+test('pain text analysis finds areas and red flags', async () => {
+  const { analyzePain } = await import('../js/engine/injury.js');
+  assert.deepEqual(analyzePain('My left knee aches on the way down').areas, ['knee']);
+  assert.deepEqual(analyzePain('lower back twinge and sore wrist').areas.sort(), ['back', 'wrist']);
+  assert.deepEqual(analyzePain('pain in my calf').areas, ['ankle']);
+  assert.ok(analyzePain('felt a pop and now it is swollen').redFlags.length >= 2);
+  assert.ok(analyzePain('chest feels tight').redFlags.includes('chest pain or pressure'));
+  assert.deepEqual(analyzePain('just tired').areas, []);
+});
+
+test('a pain report protects that area in this week and future weeks', async () => {
+  const { addReport, planProfile, planAvoid } = await import('../js/engine/injury.js');
+  const { injuries } = addReport([], { date: '2026-11-05', areas: ['shoulder'], severity: 'moderate', exId: 'pushup' });
+  const p = planProfile(base, injuries);
+  const avoid = planAvoid([], injuries);
+  for (let d = 0; d < 21; d += 1) {
+    const s = buildSession(p, plan, addDays(parseKey('2026-11-05'), d), { avoid });
+    for (const it of s.items) {
+      assert.ok((BY_ID[it.exId].stress.shoulder || 0) < 2, `${it.exId} loads shoulder`);
+      assert.notEqual(it.exId, 'pushup');
+    }
+  }
+});
+
+test('check-ins: due after 14 days, "not yet" repeats every 14 days, "ready" restores', async () => {
+  const { addReport, dueCheckIns, answerCheckIn, planProfile, planAvoid } = await import('../js/engine/injury.js');
+  let { injuries, injury } = addReport([], { date: '2026-11-05', areas: ['knee'], exId: 'glute_bridge' });
+  assert.equal(injury.nextCheck, '2026-11-19');
+  assert.equal(dueCheckIns(injuries, parseKey('2026-11-18')).length, 0);
+  assert.equal(dueCheckIns(injuries, parseKey('2026-11-19')).length, 1);
+  injuries = answerCheckIn(injuries, injury.id, 'not-yet', parseKey('2026-11-19'));
+  assert.equal(injuries[0].nextCheck, '2026-12-03');
+  assert.equal(dueCheckIns(injuries, parseKey('2026-11-25')).length, 0);
+  injuries = answerCheckIn(injuries, injury.id, 'worse', parseKey('2026-12-03'));
+  assert.equal(injuries[0].nextCheck, '2026-12-17');
+  assert.ok(planProfile(base, injuries).issues.includes('knee'));
+  injuries = answerCheckIn(injuries, injury.id, 'ready', parseKey('2026-12-17'));
+  assert.equal(injuries[0].status, 'resolved');
+  assert.ok(!planProfile(base, injuries).issues.includes('knee'));
+  assert.deepEqual(planAvoid([], injuries), []);
+  assert.equal(injuries[0].checks.length, 3);
+});
+
+test('re-reporting the same area merges and restarts the 2-week clock', async () => {
+  const { addReport } = await import('../js/engine/injury.js');
+  let r = addReport([], { date: '2026-11-05', areas: ['knee'], severity: 'mild', exId: 'bw_squat' });
+  r = addReport(r.injuries, { date: '2026-11-10', areas: ['knee'], severity: 'sharp', exId: 'reverse_lunge' });
+  assert.ok(r.merged);
+  assert.equal(r.injuries.length, 1);
+  assert.deepEqual(r.injuries[0].exIds, ['bw_squat', 'reverse_lunge']);
+  assert.equal(r.injuries[0].severity, 'sharp');
+  assert.equal(r.injuries[0].nextCheck, '2026-11-24');
+});

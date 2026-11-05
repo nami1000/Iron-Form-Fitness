@@ -4,8 +4,16 @@ import { assessGoal } from './engine/calc.js';
 import { avgExerciseKcalPerDay, buildSession, recoverySession, dateKey, DAY_TYPES, addDays, parseKey, dayIndex, weekSchedule } from './engine/planner.js';
 import { projection, computeStreak, projectionChange } from './engine/progress.js';
 import { fmtWeight } from './engine/units.js';
+import { planProfile, planAvoid } from './engine/injury.js';
 
 export const S = () => load();
+
+/** Profile + avoid list the planner should use: sign-up problem areas plus any
+ * active pain reports (until the user is cleared at a check-in). */
+export function planInputs() {
+  const st = S();
+  return { profile: planProfile(st.profile, st.injuries || []), avoid: planAvoid(st.avoid, st.injuries || []) };
+}
 export const fmtW = (kg, dp = 1) => fmtWeight(kg, S().profile?.units || 'metric', dp);
 
 /** Create the plan object + feasibility assessment for a profile draft (not saved). */
@@ -28,7 +36,7 @@ export function commitPlan(profile, plan) {
 /** This plan-week as it should now run, given missed/completed workouts. */
 export function thisWeek(today = new Date()) {
   const st = S();
-  return weekSchedule(st.profile, st.plan, st.logs, today);
+  return weekSchedule(planInputs().profile, st.plan, st.logs, today);
 }
 
 /**
@@ -44,17 +52,18 @@ export function dayPlan(date, today = new Date()) {
   let ref = date;
   if (w === Math.floor(tIdx / 7)) ref = today;
   else if (idx > tIdx) ref = addDays(parseKey(st.plan.startDate), w * 7);
-  const ws = weekSchedule(st.profile, st.plan, st.logs, ref);
+  const ws = weekSchedule(planInputs().profile, st.plan, st.logs, ref);
   return ws.days.find((d) => d.key === dateKey(date));
 }
 
 export function sessionFor(date = new Date(), opts = {}) {
   const st = S();
   const key = dateKey(date);
-  if (opts.recovery) return recoverySession(st.profile, st.plan, date, st.avoid);
+  const { profile, avoid } = planInputs();
+  if (opts.recovery) return recoverySession(profile, st.plan, date, avoid);
   const planned = dayPlan(date);
-  return buildSession(st.profile, st.plan, date, {
-    avoid: st.avoid, intensity: st.intensity, salt: st.salt[key] || '',
+  return buildSession(profile, st.plan, date, {
+    avoid, intensity: st.intensity, salt: st.salt[key] || '',
     typeOverride: opts.type || st.salt[`${key}:type`] || planned.type,
     catchUp: !!planned.catchUp,
   });

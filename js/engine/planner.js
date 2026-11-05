@@ -6,8 +6,9 @@
 //  3. Any exercise stressing a user's issue area at ≥ 2 is excluded.
 //  4. Jumping / impact moves are excluded for beginners, for knee / ankle /
 //     hip / back issues, and when the health-readiness check raised a flag.
-//  5. Exercises the user reported pain on are never scheduled again
-//     (until they clear them in Settings).
+//  5. Pain reports protect that body area (and pause the exercise) until the
+//     user is cleared at a 2-weekly check-in (see engine/injury.js); exercises
+//     the user removed permanently are never scheduled (until restored in Settings).
 //  6. Every session starts with a warm-up and ends with a cool-down.
 
 import { EXERCISES, BY_ID } from '../data/exercises.js';

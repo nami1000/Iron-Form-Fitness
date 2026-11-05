@@ -5,6 +5,9 @@ import { COACHES, Voice, loadVoices, englishVoices, unlockAudio } from '../voice
 import { S } from '../service.js';
 import { update, exportJSON, importJSON, resetAll, cloudStatus } from '../store.js';
 import { musicPicker } from './musicpicker.js';
+import { activeInjuries, answerCheckIn } from '../engine/injury.js';
+import { areaNames, pausedBy } from './home.js';
+import { fmtDate } from './dom.js';
 
 export function renderSettings(root) {
   const st = S();
@@ -35,12 +38,30 @@ export function renderSettings(root) {
       h('div', { class: 'card' }, h('h3', {}, 'Plan'),
         h('p', { class: 'small muted' }, 'Change your weight goal, date, level, focus areas, problem areas, equipment, dumbbells, minutes, days per week, or health answers. Your history and streak are kept.'),
         h('a', { class: 'btn block', href: '#/edit' }, '✎ Edit profile & rebuild plan')),
+      h('div', { class: 'card' }, h('h3', {}, 'Pain & recovery'),
+        activeInjuries(S().injuries).length
+          ? activeInjuries(S().injuries).map((j) => {
+            const paused = pausedBy(j, S().injuries);
+            return h('div', { class: 'card flat', style: { marginBottom: '10px' } },
+              h('div', {}, h('b', {}, `🩹 ${areaNames(j)}`), ` · ${j.severity} · reported ${fmtDate(j.date, { month: 'short', day: 'numeric' })}`),
+              j.note ? h('p', { class: 'small muted' }, `"${j.note}"`) : null,
+              (j.reports || []).length > 1 ? h('p', { class: 'tiny muted' }, `Reported ${j.reports.length} times`) : null,
+              h('p', { class: 'small' }, `Next check-in: ${fmtDate(j.nextCheck, { weekday: 'short', month: 'short', day: 'numeric' })}`),
+              h('details', {}, h('summary', { class: 'small muted' }, `${paused.length} exercises paused`), h('p', { class: 'tiny muted' }, paused.map((e) => e.name).join(' · ') || 'None in your current plan')),
+              (j.checks || []).length ? h('p', { class: 'tiny muted' }, `Check-ins: ${j.checks.map((c) => `${fmtDate(c.date, { month: 'short', day: 'numeric' })} ${c.answer}`).join(', ')}`) : null,
+              h('button', { class: 'btn ghost small', style: { marginTop: '6px' }, onclick: () => { update((x) => { x.injuries = answerCheckIn(x.injuries, j.id, 'ready'); }); toast('Exercises added back. Start gently.'); draw(); } }, 'I\'m better now: add them back'));
+          })
+          : h('p', { class: 'small muted' }, 'No active pain reports. Use "Something hurts" during a workout to tell me what hurts; I\'ll protect that area and check in every 2 weeks.'),
+        (S().injuries || []).filter((j) => j.status === 'resolved').length
+          ? h('details', {}, h('summary', { class: 'small muted' }, 'Recovered'), (S().injuries || []).filter((j) => j.status === 'resolved').slice(-8).reverse().map((j) =>
+            h('p', { class: 'tiny muted' }, `${areaNames(j)}: reported ${fmtDate(j.date, { month: 'short', day: 'numeric' })}, cleared ${fmtDate(j.resolvedAt, { month: 'short', day: 'numeric' })}`)))
+          : null),
       h('div', { class: 'card' }, h('h3', {}, 'Removed exercises'),
         st.avoid.length
-          ? [h('p', { class: 'small muted' }, 'You reported discomfort on these, so they\'re never scheduled. Only restore one when it\'s pain-free.'),
+          ? [h('p', { class: 'small muted' }, 'Removed permanently, so they\'re never scheduled. Only restore one when it\'s pain-free.'),
             ...st.avoid.map((id) => h('div', { class: 'row between', style: { padding: '4px 0' } }, h('span', {}, BY_ID[id]?.name || id),
               h('button', { class: 'btn ghost small', onclick: () => { update((x) => { x.avoid = x.avoid.filter((a) => a !== id); }); draw(); toast('Restored to rotation'); } }, 'Restore')))]
-          : h('p', { class: 'small muted' }, 'None. Tap "Something hurts" during a workout to remove a move.'),
+          : h('p', { class: 'small muted' }, 'None.'),
         h('p', { class: 'tiny muted', style: { marginTop: '8px' } }, `Training intensity adjustment: ${Math.round((st.intensity - 1) * 100)}% (from your post-workout ratings)`)),
       h('div', { class: 'card' }, h('h3', {}, 'Your data'),
         h('p', { class: 'small muted' }, cloudStatus() === 'synced'

@@ -1,6 +1,7 @@
 // Workout player: Sgt. Iron demonstrates and trains alongside the user.
 import { go as navigate } from '../nav.js';
-import { h, mount, modal, fmtDuration } from './dom.js';
+import { h, mount, modal, fmtDuration, chips, toast } from './dom.js';
+import { PAIN_AREAS, SEVERITY, CHECK_IN_DAYS, analyzePain, addReport, planProfile } from '../engine/injury.js';
 import { Trainer } from '../trainer.js';
 import { BY_ID } from '../data/exercises.js';
 import { DAY_TYPES, muscleTally, dateKey } from '../engine/planner.js';
@@ -55,6 +56,7 @@ export function renderPlayer(root, query) {
   const done = session.items.map(() => 0); // completed sides
   const active = session.items.map(() => 0); // active seconds
   const skipped = new Set();
+  const blocked = new Set(); // items removed today after a pain report
   const pain = [];
   const startedAt = Date.now();
   let i = 0;
@@ -136,6 +138,9 @@ export function renderPlayer(root, query) {
 
   // ───── step entry ─────
   function enter() {
+    // skip anything removed after a pain report
+    const stepItem = (x) => (x.k === 'rest' ? x.nextIdx : x.idx);
+    while (i < steps.length - 1 && steps[i].k !== 'pep' && blocked.has(stepItem(steps[i]))) i += 1;
     const s = steps[i];
     stepElapsed = 0; reps = 0; spokenMarks = new Set();
     bar.style.width = `${(100 * i) / steps.length}%`;
@@ -321,15 +326,72 @@ export function renderPlayer(root, query) {
     const idx = s.k === 'rest' ? s.nextIdx : s.idx;
     const ex = idx != null ? exOf(idx) : null;
     voice.say('Stop. Let\'s take care of that.', { interrupt: true });
+    const report = { areas: new Set(), severity: 'mild', note: '' };
+    const guessed = new Set(); // areas picked up from the text (user can untick)
+    const dismissed = new Set(); // guesses the user unticked: don't re-add
     modal((box, close) => {
-      box.append(h('h2', {}, '🩹 Stop and check in'),
-        h('div', { class: 'card danger' }, h('p', { class: 'small' }, h('b', {}, 'Stop the workout now'), ' if you have chest pain or pressure, trouble breathing, dizziness, or sharp or sudden joint pain. Seek medical help if it\'s severe or doesn\'t settle.')),
-        ex ? h('p', {}, `Was it during `, h('b', {}, ex.name), '?') : null,
-        ex ? h('button', { class: 'btn block', onclick: () => { pain.push({ exId: ex.id, removed: true }); update((x) => { if (!x.avoid.includes(ex.id)) x.avoid.push(ex.id); }); close(); skipToAfter(idx); } }, 'Skip it and remove it from my plan') : null,
-        ex ? h('button', { class: 'btn dark block', style: { marginTop: '8px' }, onclick: () => { pain.push({ exId: ex.id, removed: false }); close(); skipToAfter(idx); } }, 'Skip it just for today') : null,
-        h('button', { class: 'btn ghost block', style: { marginTop: '8px' }, onclick: () => { close(); togglePause(); } }, 'It was nothing, continue'),
-        h('button', { class: 'btn red block', style: { marginTop: '8px' }, onclick: () => { if (ex) pain.push({ exId: ex.id, removed: false, ended: true }); close(); finish(true); } }, 'End workout now'));
+      const flags = h('div', {});
+      const areaWrap = h('div', {});
+      const sevWrap = h('div', {});
+      const actions = h('div', {});
+      const drawAreas = () => mount(areaWrap, chips(PAIN_AREAS, [...report.areas], { danger: true, onChange: (v) => { for (const g of guessed) if (!v.includes(g)) { dismissed.add(g); guessed.delete(g); } report.areas = new Set(v); drawActions(); } }));
+      const drawSev = () => mount(sevWrap, SEVERITY.map((o) => h('div', { class: `option ${report.severity === o.id ? 'on' : ''}`, style: { padding: '8px 12px', marginBottom: '6px' }, onclick: () => { report.severity = o.id; drawSev(); drawActions(); } },
+        h('b', { style: { fontSize: '0.95rem' } }, o.label), h('div', { class: 'tiny muted' }, o.desc))));
+      const note = h('textarea', { rows: 2, placeholder: 'e.g. "left knee aches at the bottom of the squat"', oninput: (e) => {
+        report.note = e.target.value;
+        const a = analyzePain(report.note);
+        for (const g of guessed) if (!a.areas.includes(g)) { report.areas.delete(g); guessed.delete(g); }
+        for (const x of a.areas) if (!report.areas.has(x) && !dismissed.has(x)) { report.areas.add(x); guessed.add(x); }
+        drawAreas(); drawActions();
+      } });
+      const drawActions = () => {
+        const a = analyzePain(report.note);
+        const urgent = report.severity === 'sharp' || a.redFlags.length > 0;
+        mount(flags, urgent ? h('div', { class: 'card danger' }, h('p', { class: 'small' }, h('b', {}, 'Please stop this workout. '),
+          a.redFlags.length ? `You mentioned ${a.redFlags.join(', ')}. ` : 'Sharp or sudden pain is a warning sign. ',
+          'Rest, and get checked by a doctor or physiotherapist, urgently if it is chest pain, trouble breathing, dizziness, or you can\'t bear weight.')) : null);
+        const names = [...report.areas].map((x) => PAIN_AREAS.find((p) => p.id === x)?.label.toLowerCase());
+        const protectTxt = names.length ? `Protect my ${names.join(' & ')} and continue` : ex ? `Pause ${ex.name} and continue` : 'Save and continue';
+        const endBtn = h('button', { class: `btn ${urgent ? 'red' : 'ghost'} block`, style: { marginTop: '8px' }, onclick: () => { save(true); close(); finish(true); } }, urgent ? 'End workout now (recommended)' : 'End workout now');
+        mount(actions,
+          urgent ? endBtn : null,
+          h('button', { class: `btn ${urgent ? 'dark' : ''} block`, style: { marginTop: '8px' }, onclick: () => { save(true); close(); protectRest(); } }, protectTxt),
+          h('p', { class: 'tiny muted', style: { margin: '4px 2px 0' } }, `Exercises that load this area are removed from the rest of today, this week and future weeks. I'll check in with you in ${CHECK_IN_DAYS} days.`),
+          ex ? h('button', { class: 'btn dark block', style: { marginTop: '8px' }, onclick: () => { save(false); close(); skipToAfter(idx); } }, 'Just skip this exercise today') : null,
+          h('button', { class: 'btn ghost block', style: { marginTop: '8px' }, onclick: () => { close(); togglePause(); } }, 'It was nothing, continue'),
+          urgent ? null : endBtn);
+      };
+      box.append(h('h2', {}, '🩹 What hurts?'),
+        ex ? h('p', { class: 'small muted' }, 'During ', h('b', {}, ex.name), '. Tell me where and how it feels so I can adjust your plan.') : null,
+        h('label', {}, 'Where? (tap all that apply)'), areaWrap,
+        h('label', { style: { marginTop: '12px' } }, 'How bad?'), sevWrap,
+        h('label', { style: { marginTop: '8px' } }, 'Describe it (optional)'), note, flags, actions);
+      drawAreas(); drawSev(); drawActions();
     });
+
+    function save(protect) {
+      const areas = [...report.areas];
+      pain.push({ exId: ex?.id || null, areas, severity: report.severity, note: report.note.trim(), protected: protect });
+      if (!protect) return;
+      update((x) => {
+        const r = addReport(x.injuries || [], { date: dateKey(), areas, severity: report.severity, note: report.note.trim(), exId: ex?.id || null });
+        x.injuries = r.injuries;
+      });
+      // remove every remaining move today that loads the area (or is the same exercise)
+      const prof = planProfile({ issues: [] }, S().injuries);
+      session.items.forEach((it, k) => {
+        if (k < (idx ?? 0)) return;
+        const e = BY_ID[it.exId];
+        const loads = (prof.issues || []).some((a) => (e.stress[a] || 0) >= 2 || (e.impact && ['knee', 'ankle', 'hip', 'back'].includes(a)));
+        if (it.exId === ex?.id || loads) { blocked.add(k); skipped.add(k); }
+      });
+    }
+    function protectRest() {
+      const n = [...blocked].filter((k) => k !== idx).length;
+      if (n) toast(`Removed ${n} more move${n > 1 ? 's' : ''} from today that load that area.`);
+      voice.say('Got it. I\'ve adjusted your plan to protect it.');
+      paused = false; pauseBtn.textContent = '⏸ Pause'; last = performance.now(); enter();
+    }
   }
 
   function skipToAfter(idx) {

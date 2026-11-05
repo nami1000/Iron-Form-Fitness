@@ -1,12 +1,14 @@
 import { h, mount, ring, fmtDate, modal, toast } from './dom.js';
 import { Trainer } from '../trainer.js';
 import { BY_ID, ISSUE_AREAS } from '../data/exercises.js';
-import { DAY_TYPES, dateKey, addDays, parseKey, LEVELS, CATCH_UP } from '../engine/planner.js';
+import { DAY_TYPES, dateKey, addDays, parseKey, LEVELS, CATCH_UP, exclusionReason } from '../engine/planner.js';
 import { rankFor, needsWeighIn } from '../engine/progress.js';
 import { fromKg, toKg, weightUnit, round } from '../engine/units.js';
 import { S, fmtW, sessionFor, todayType, streak, refreshProjection, dayPlan, thisWeek } from '../service.js';
 import { update } from '../store.js';
 import { unlockAudio } from '../music.js';
+import { dueCheckIns, answerCheckIn, PAIN_AREAS, CHECK_IN_DAYS, planProfile, planAvoid } from '../engine/injury.js';
+import { EXERCISES } from '../data/exercises.js';
 
 export function rxText(it, units) {
   const ex = BY_ID[it.exId];
@@ -189,8 +191,44 @@ export function renderHome(root) {
   const streakCard = h('div', { class: 'streak-banner', style: { marginBottom: '14px' } }, h('span', { class: 'flame' }, s > 0 ? '🔥' : '🪖'),
     h('div', { class: 'grow' }, h('b', {}, `${s}-day streak`), h('div', { class: 'small muted' }, streakMsg)),
     h('div', { class: 'tiny muted', style: { textAlign: 'right' } }, 'BEST', h('br'), h('b', { style: { fontSize: '1.2rem' } }, Math.max(s, st.bestStreak))));
-  mount(root, header, streakCard, ...notices, todayCard, goalCard, week, rankCard,
+  // 2-week pain check-ins
+  const checkIns = dueCheckIns(st.injuries || []).map((j) => checkInCard(j, () => renderHome(root)));
+  mount(root, header, ...checkIns, streakCard, ...notices, todayCard, goalCard, week, rankCard,
     h('p', { class: 'tiny muted center' }, `${LEVELS[st.profile.level]} · ${st.profile.minutes} min · ${st.profile.daysPerWeek} days/week · plan started ${fmtDate(st.plan.startDate)}`));
+}
+
+export const areaNames = (j) => (j.areas.length ? j.areas.map((a) => PAIN_AREAS.find((p) => p.id === a)?.label.toLowerCase()).join(' & ') : (j.exIds.map((id) => BY_ID[id]?.name).join(', ') || 'injury'));
+
+/** Exercises currently held back by an injury report. */
+export function pausedBy(j, injuries) {
+  const st = S();
+  const others = injuries.filter((x) => x.id !== j.id);
+  const without = { p: planProfile(st.profile, others), a: planAvoid(st.avoid, others) };
+  const withIt = { p: planProfile(st.profile, injuries), a: planAvoid(st.avoid, injuries) };
+  // in the plan if not for this report
+  return EXERCISES.filter((e) => !exclusionReason(e, without.p, without.a) && exclusionReason(e, withIt.p, withIt.a));
+}
+
+export function checkInCard(j, onDone) {
+  const st = S();
+  const n = pausedBy(j, st.injuries).length;
+  const weeks = Math.round((Date.now() - parseKey(j.date).getTime()) / (7 * 86400000));
+  const answer = (a) => {
+    update((x) => { x.injuries = answerCheckIn(x.injuries, j.id, a); });
+    if (a === 'ready') toast(`Welcome back! ${n} exercises are back in your plan. Start gently.`, 4500);
+    else if (a === 'worse') toast('Keeping them paused. Please get it checked by a doctor or physio.', 5000);
+    else toast(`No rush. I'll check again in ${CHECK_IN_DAYS} days.`, 3500);
+    onDone?.();
+  };
+  return h('div', { class: 'card alert' },
+    h('h3', {}, `🩹 Check-in: how is your ${areaNames(j)}?`),
+    h('p', { class: 'small' }, `You reported ${j.severity} pain ${weeks >= 1 ? `${weeks} week${weeks > 1 ? 's' : ''}` : 'recently'} ago (${fmtDate(j.date, { month: 'short', day: 'numeric' })})${j.note ? `: "${j.note}"` : ''}. Since then ${n} exercise${n === 1 ? ' has' : 's have'} been paused to protect it.`),
+    (j.checks || []).length ? h('p', { class: 'tiny muted' }, `Earlier check-ins: ${j.checks.map((c) => `${fmtDate(c.date, { month: 'short', day: 'numeric' })} ${c.answer === 'worse' ? 'worse' : 'not ready'}`).join(', ')}`) : null,
+    h('p', { class: 'small' }, 'Are you pain-free in daily life and ready to bring those exercises back?'),
+    h('button', { class: 'btn green block', onclick: () => answer('ready') }, '✅ Feeling good. Add them back'),
+    h('button', { class: 'btn dark block', style: { marginTop: '8px' }, onclick: () => answer('not-yet') }, `⏳ Better, but not ready yet (ask in ${CHECK_IN_DAYS} days)`),
+    h('button', { class: 'btn ghost block', style: { marginTop: '8px' }, onclick: () => answer('worse') }, '😣 Still hurts or worse'),
+    h('p', { class: 'tiny muted', style: { marginTop: '8px' } }, 'Pain lasting more than 2 weeks is worth getting checked by a doctor or physiotherapist.'));
 }
 
 export function renderSessionPreview(root, query) {
